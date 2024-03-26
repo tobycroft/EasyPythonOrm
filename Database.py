@@ -1,6 +1,7 @@
 import configparser
 
 import pymysql
+from pymysql import Connection
 
 import config.db
 
@@ -146,7 +147,7 @@ OP = {'=': '=', '>': '>', '<': '<', '>=': '>=', '<=': '<=', '<>': '<>', 'like': 
 
 
 class Db(object):
-    __conn = None
+    __conn: Connection = None
     __map = []
     __bindWhere = []
     __bindData = []
@@ -158,31 +159,71 @@ class Db(object):
     __distinct = False
     __option = {}
     __build = False
+    __autocommit = True
+    __prefix = ''
+    __debug = False
 
-    def __init__(self):
-        try:
-            self.conf = configparser.ConfigParser()
-            self.conf.read("config.ini", encoding="utf-8")
-            self.host = self.conf.get("database", "dbhost")
-            self.username = self.conf.get("database", "dbuser")
-            self.password = self.conf.get("database", "dbpass")
-            self.db = self.conf.get("database", "dbname")
-            self.charset = "utf8mb4"
-            self.port = int(self.conf.get("database", "dbport"))
-            # self.prefix = self.conf.get("mysql", "PREFIX")
-        except Exception as e:
-            self.host = config.db.dbhost
-            self.username = config.db.dbuser
-            self.password = config.db.dbpass
-            self.db = config.db.dbname
-            self.charset = "utf8mb4"
-            self.port = int(config.db.dbport)
-            self.prefix = ""
+    def __init__(self, conn: Connection = None):
+        if conn is not None:
+            self.__autocommit = False
+            self.__conn = conn
+        else:
+            try:
+                self.conf = configparser.ConfigParser()
+                self.conf.read("conf.ini", encoding="utf-8")
+                self.host = self.conf.get("database", "dbhost")
+                self.username = self.conf.get("database", "dbuser")
+                self.password = self.conf.get("database", "dbpass")
+                self.db = self.conf.get("database", "dbname")
+                self.charset = "utf8mb4"
+                self.port = int(self.conf.get("database", "dbport"))
+                self.__debug = bool(self.conf.get("database", "debug"))
+                # self.__prefix = self.conf.get("mysql", "PREFIX")
+            except Exception as e:
+                self.host = config.db.dbhost
+                self.username = config.db.dbuser
+                self.password = config.db.dbpass
+                self.db = config.db.dbname
+                self.charset = "utf8mb4"
+                self.port = int(config.db.dbport)
+                self.__debug = True
+                print("数据库配置文件错误:", e)
+                # self.__prefix = ""
+        self.__connect()
 
     def __connect(self):
-        self.__conn = pymysql.connect(host=self.host, port=self.port, user=self.username, password=self.password,
-                                      db=self.db, charset=self.charset, init_command="SET SESSION time_zone='+08:00'")
+        if self.__conn is None:
+            if self.__debug:
+                print("数据库连接至MySQL……")
+            self.__conn = pymysql.connect(host=self.host,
+                                          port=self.port,
+                                          user=self.username,
+                                          password=self.password,
+                                          db=self.db,
+                                          charset=self.charset,
+                                          init_command="SET SESSION time_zone='+08:00'",
+                                          autocommit=False)
         self.cursor = self.__conn.cursor()
+
+    def get_connection(self):
+        return self.__conn
+
+    def begin(self):
+        self.__autocommit = False
+        self.__conn.begin()
+        return self
+
+    def commit(self):
+        if self.__debug:
+            print("数据库:commit", )
+        self.__conn.commit()
+        return self
+
+    def rollback(self):
+        if self.__debug:
+            print("数据库:rollback", )
+        self.__conn.rollback()
+        return self
 
     def __close(self):
         self.cursor.close()
@@ -190,12 +231,12 @@ class Db(object):
 
     def table(self, table):
         self.clear()
-        self.__name = self.prefix + table
+        self.__name = self.__prefix + table
         return self
 
     def name(self, table):
         self.clear()
-        self.__name = self.prefix + table
+        self.__name = self.__prefix + table
         return self
 
     def where(self, where, val_mark=None, val2=None):
@@ -236,7 +277,7 @@ class Db(object):
 
     #   字段没处理明白，暂时禁用
     # def join(self, table, where, mold='inner'):
-    # table = self.prefix + table
+    # table = self.__prefix + table
     # self.__join.append({'table': table, 'where': where, 'mold': mold})
     # return self
     #
@@ -294,15 +335,19 @@ class Db(object):
                 sql += item['mold'] + ' join ' + item['table'] + ' on ' + item['where'] + ' '
 
         if len(self.__map) > 0:
-            sql += ' where 1=1 '
+            sql += ' where'
+            i = 0
             for item in self.__map:
+                if i > 0:
+                    sql += ' and'
+                i += 1
                 if typeof(item) == 'str':
-                    sql += ' and ( ' + item + ' ) '
+                    sql += ' ( `' + item + '` ) '
                 elif typeof(item) == 'dict':
                     values = 'null'
                     # values = format_field(item.get('val'), column['type'])
                     values = item.get('val')
-                    sql += ' and ( ' + item.get('key') + ' ' + item.get('type') + ' ' + values + ' ) '
+                    sql += ' ( `' + item.get('key') + '` ' + item.get('type') + ' ' + values + ' ) '
 
         if self.__option.get('group'):
             sql += ' group by ' + self.__option['group'] + ' '
@@ -344,11 +389,11 @@ class Db(object):
             return None
         result = None
         try:
-            self.__connect()
             self.cursor.execute(sql, self.__bindWhere)
             result = self.cursor.fetchone()
             columns = [desc[0] for desc in self.cursor.description]
-            self.__close()
+            if self.__autocommit:
+                self.__close()
         except Exception as e:
             print(sql, self.__bindWhere)
             print(e)
@@ -373,11 +418,11 @@ class Db(object):
             return None
         result = None
         try:
-            self.__connect()
             self.cursor.execute(sql, self.__bindWhere)
             result = self.cursor.fetchall()
             columns = [desc[0] for desc in self.cursor.description]
-            self.__close()
+            if self.__autocommit:
+                self.__close()
         except Exception as e:
             print(sql, self.__bindWhere)
             print(e)
@@ -392,12 +437,6 @@ class Db(object):
             data.append(row_data)
         return data
 
-    def get(self, vid):
-        pk = self.__getPk()
-        if pk is not None:
-            self.whereRow(pk, vid)
-        return self.find()
-
     def value(self, field):
         self.__column = field
         sql = self.__comQuerySql()
@@ -405,10 +444,10 @@ class Db(object):
             return sql
         result = None
         try:
-            self.__connect()
             self.cursor.execute(sql)
             result = self.cursor.fetchone()
-            self.__close()
+            if self.__autocommit:
+                self.__close()
         except Exception as e:
             print(sql)
             print(e)
@@ -445,20 +484,24 @@ class Db(object):
         if typeof(data) != 'dict':
             return None
         fields = ''
-        i = 0
         sql = ''
         if len(self.__map) > 0:
-            sql += ' where 1=1 '
+            sql += ' where'
+            i = 0
             for item in self.__map:
+                if i > 0:
+                    sql += ' and'
+                i += 1
                 if typeof(item) == 'str':
-                    sql += ' and ( ' + item + ' ) '
+                    sql += ' ( `' + item + '` ) '
                 elif typeof(item) == 'dict':
                     # values = format_field(item.get('val'), column['type'])
                     values = item.get('val')
-                    # sql += ' and ( ' + item.get('key') + ' ' + item.get('type') + ' ' + values + ' ) '
-                    sql += ' and ( ' + item.get('key') + ' ' + item.get('type') + ' %s ) '
+                    # sql += ' ( ' + item.get('key') + ' ' + item.get('type') + ' ' + values + ' ) '
+                    sql += ' ( `' + item.get('key') + '` ' + item.get('type') + ' %s ) '
         else:
             print('禁止不使用 where 更新数据')
+        i = 0
         for key in data:
             if i == 0:
                 # fields = key + '=' + format_field(data[key], column['type'])
@@ -493,22 +536,24 @@ class Db(object):
         if fields == '' or values == '':
             return 0
         sql = str(" INSERT INTO " + self.__name + " ( " + fields + " ) values ( " + values + " ) ")
-        print(sql, self.__bindData)
+        if self.__debug:
+            print(sql, self.__bindData)
         pk = 0
         try:
-            self.__connect()
             self.cursor.execute(sql, self.__bindData)
             pk = self.__conn.insert_id()
-            self.__conn.commit()
-            self.__close()
+            if self.__autocommit:
+                self.commit()
+                self.__close()
         except Exception as e:
-            self.__conn.rollback()
-            print(e)
+            if self.__autocommit:
+                self.rollback()
+            print("insertGetId:", e)
             return None
         return pk
 
-    def setOption(self, key, val):
-        return self.update({key: val})
+    # def setOption(self, key, val):
+    #     return self.update({key: val})
 
     def insertAll(self, datas):
         if typeof(datas) != 'list':
@@ -522,12 +567,15 @@ class Db(object):
         i = 0
         sql = ''
         if len(self.__map) > 0:
-            sql += ' where 1=1 '
+            sql += ' where'
             for item in self.__map:
+                if i > 0:
+                    sql += ' and'
+                i += 1
                 if typeof(item) == 'str':
-                    sql += ' and ( ' + item + ' ) '
+                    sql += ' ( ' + item + ' ) '
                 elif typeof(item) == 'dict':
-                    sql += ' and ( ' + item.get('key') + ' ' + item.get('type') + ' ' + str(item.get('val')) + ' ) '
+                    sql += ' ( ' + item.get('key') + ' ' + item.get('type') + ' ' + str(item.get('val')) + ' ) '
         else:
             print('禁止不使用 where 删除数据')
         sql = str("delete from " + self.__name + sql)
@@ -558,26 +606,29 @@ class Db(object):
     #         print(e)
     #     return list([{'field': item[0], 'type': item[1], 'key': item[4]} for item in list_data])
 
-    def __getPk(self):
-        # fields = self.__showColumn()
-        # for field in fields:
-        #     if field['key'] == 'PRI':
-        #         return field['field']
-        return None
+    # def __getPk(self):
+    #     # fields = self.__showColumn()
+    #     # for field in fields:
+    #     #     if field['key'] == 'PRI':
+    #     #         return field['field']
+    #     return None
 
     def __edit(self, sql):
+        if self.__debug:
+            print("执行语句：", sql, self.__bindData + self.__bindWhere)
         if self.__build:
             return sql, self.__bindData + self.__bindWhere
         count = 0
         try:
-            self.__connect()
             count = self.cursor.execute(sql, self.__bindData + self.__bindWhere)
-            self.__conn.commit()
-            self.__close()
+            if self.__autocommit:
+                self.commit()
+                self.__close()
         except Exception as e:
-            self.__conn.rollback()
-            print('Error:  ', sql)
-            print(e)
+            if self.__autocommit:
+                self.rollback()
+            print('Database-Error:  ', sql, self.__bindData + self.__bindWhere)
+            print("__edit:", e)
         return count
 
     def __add(self, sql):
@@ -585,12 +636,13 @@ class Db(object):
             return sql, self.__bindData
         count = 0
         try:
-            self.__connect()
             count = self.cursor.execute(sql, self.__bindData)
-            self.__conn.commit()
-            self.__close()
+            if self.__autocommit:
+                self.commit()
+                self.__close()
         except Exception as e:
-            self.__conn.rollback()
+            if self.__autocommit:
+                self.rollback()
             print('Error:  ', sql)
             print(e)
         return count
