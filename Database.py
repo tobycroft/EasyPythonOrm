@@ -145,6 +145,45 @@ def typeof(variate):
 
 OP = {'=': '=', '>': '>', '<': '<', '>=': '>=', '<=': '<=', '<>': '<>', 'like': 'like', 'in': 'in', 'not in': '<>', 'is null': 'is null', 'is not null': 'is not null'}
 
+conf = configparser.ConfigParser()
+try:
+    conf.read("conf.ini", encoding="utf-8")
+    try:
+        config.db.dbhost = conf.get("database", "dbhost")
+    except Exception as e:
+        print("数据库：读取dbhost错误:", e)
+    try:
+        config.db.dbuser = conf.get("database", "dbuser")
+    except Exception as e:
+        print("数据库：读取dbuser错误:", e)
+    try:
+        config.db.dbpass = conf.get("database", "dbpass")
+    except Exception as e:
+        print("数据库：读取dbpass错误:", e)
+    try:
+        config.db.dbname = conf.get("database", "dbname")
+    except Exception as e:
+        print("数据库：读取dbname错误:", e)
+    try:
+        config.db.dbport = int(conf.get("database", "dbport"))
+    except Exception as e:
+        print("数据库：读取dbport错误:", e)
+except Exception as e:
+    if "database" not in conf:
+        conf["database"] = {
+            "need": "False",
+            "retry": "True",
+            "dbhost": "127.0.0.1",
+            "dbuser": "",
+            "dbpass": "",
+            "dbname": "",
+            "dbport": 3306
+        }
+        with open("conf.ini", "w") as configfile:
+            conf.write(configfile)
+        print("e")
+        exit("数据库：读取conf配置文件错误:", )
+
 
 class Db(object):
     __conn: Connection = None
@@ -163,50 +202,34 @@ class Db(object):
     __prefix = ''
     __debug = False
 
-    def __init__(self, conn: Connection = None):
+    def __init__(self, conn: Connection = None, debug=False):
         if conn is not None:
             self.__autocommit = False
             self.__conn = conn
-        else:
-            try:
-                self.conf = configparser.ConfigParser()
-                self.conf.read("conf.ini", encoding="utf-8")
-                self.host = self.conf.get("database", "dbhost")
-                self.username = self.conf.get("database", "dbuser")
-                self.password = self.conf.get("database", "dbpass")
-                self.db = self.conf.get("database", "dbname")
-                self.charset = "utf8mb4"
-                self.port = int(self.conf.get("database", "dbport"))
-                self.__debug = bool(self.conf.get("database", "debug"))
-                # self.__prefix = self.conf.get("mysql", "PREFIX")
-            except Exception as e:
-                self.host = config.db.dbhost
-                self.username = config.db.dbuser
-                self.password = config.db.dbpass
-                self.db = config.db.dbname
-                self.charset = "utf8mb4"
-                self.port = int(config.db.dbport)
-                self.__debug = True
-                print("数据库配置文件错误:", e)
-                # self.__prefix = ""
+        self.__debug = debug
         self.__connect()
 
     def __connect(self):
         if self.__conn is None:
             if self.__debug:
                 print("数据库连接至MySQL……")
-            self.__conn = pymysql.connect(host=self.host,
-                                          port=self.port,
-                                          user=self.username,
-                                          password=self.password,
-                                          db=self.db,
-                                          charset=self.charset,
-                                          init_command="SET SESSION time_zone='+08:00'",
-                                          autocommit=False)
+            self.__conn = self.connect_to_db()
         self.cursor = self.__conn.cursor()
 
     def get_connection(self):
         return self.__conn
+
+    @staticmethod
+    def connect_to_db():
+        return pymysql.connect(host=config.db.dbhost,
+                               user=config.db.dbuser,
+                               password=config.db.dbpass,
+                               database=config.db.dbname,
+                               port=int(config.db.dbport),
+                               charset='utf8mb4',
+                               connect_timeout=5,
+                               init_command="SET SESSION time_zone='+08:00'",
+                               autocommit=False)
 
     def begin(self):
         self.__autocommit = False
@@ -466,11 +489,11 @@ class Db(object):
         i = 0
         for key in data:
             if i == 0:
-                fields = key
+                fields = "`" + key + "`"
                 # values = format_field(data[key], column['type'])
                 values = '%s'
             else:
-                fields += ',' + key
+                fields += ',' + "`" + key + "`"
                 # values += ',' + format_field(data[key], column['type'])
                 values += ', %s '
             self.__bindData.append(data[key])
@@ -480,11 +503,9 @@ class Db(object):
         sql = str(" insert into " + self.__name + " ( " + fields + ") values ( " + values + " ) ")
         return self.__add(sql)
 
-    def update(self, data):
-        if typeof(data) != 'dict':
-            return None
-        fields = ''
-        sql = ''
+    def __where_to_sql(self, sql=None):
+        if sql is None:
+            sql = ''
         if len(self.__map) > 0:
             sql += ' where'
             i = 0
@@ -495,20 +516,22 @@ class Db(object):
                 if typeof(item) == 'str':
                     sql += ' ( `' + item + '` ) '
                 elif typeof(item) == 'dict':
-                    # values = format_field(item.get('val'), column['type'])
-                    values = item.get('val')
-                    # sql += ' ( ' + item.get('key') + ' ' + item.get('type') + ' ' + values + ' ) '
                     sql += ' ( `' + item.get('key') + '` ' + item.get('type') + ' %s ) '
         else:
-            print('禁止不使用 where 更新数据')
+            print('禁止不使用 where 查询数据')
+        return sql
+
+    def update(self, data):
+        if typeof(data) != 'dict':
+            return None
+        fields = ''
+        sql = self.__where_to_sql()
         i = 0
         for key in data:
             if i == 0:
-                # fields = key + '=' + format_field(data[key], column['type'])
-                fields = key + '=%s'
+                fields = "`" + key + '` = %s'
             else:
-                # fields += str(',' + key + '=' + format_field(data[key], column['type']))
-                fields += str(',' + key + '=%s')
+                fields += str(', `' + key + '` = %s')
             self.__bindData.append(data[key])
             i += 1
         if fields == '':
@@ -548,6 +571,7 @@ class Db(object):
         except Exception as e:
             if self.__autocommit:
                 self.rollback()
+                self.__close()
             print("insertGetId:", e)
             return None
         return pk
@@ -582,10 +606,22 @@ class Db(object):
         return self.__edit(sql)
 
     def setInc(self, key, step=1):
-        return self.update({key: key + '+' + str(step)})
+        sql = self.__where_to_sql()
+        fields = "`" + key + '`=`' + key + '`+%s'
+        self.__bindData.append(step)
+        if fields == '':
+            return 0
+        sql = str("update " + self.__name + " set " + fields + ' ' + sql)
+        return self.__edit(sql)
 
     def setDec(self, key, step=1):
-        return self.update({key: key + '-' + str(step)})
+        sql = self.__where_to_sql()
+        fields = "`" + key + '`=`' + key + '`-%s'
+        self.__bindData.append(step)
+        if fields == '':
+            return 0
+        sql = str("update " + self.__name + " set " + fields + ' ' + sql)
+        return self.__edit(sql)
 
     def query(self, sql):
         return self.__edit(sql)
@@ -627,6 +663,7 @@ class Db(object):
         except Exception as e:
             if self.__autocommit:
                 self.rollback()
+                self.__close()
             print('Database-Error:  ', sql, self.__bindData + self.__bindWhere)
             print("__edit:", e)
         return count
@@ -643,6 +680,7 @@ class Db(object):
         except Exception as e:
             if self.__autocommit:
                 self.rollback()
+                self.__close()
             print('Error:  ', sql)
             print(e)
         return count
