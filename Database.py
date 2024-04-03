@@ -16,6 +16,9 @@ import config.db
 #       使用方法: sql.where({'id',1,'<>'})
 #       使用方法: sql.where({'id','(1,2)','in'})
 #       使用方法: sql.where([{'id','(1,2)','in'},{'name','%我%','like'}])
+#   whereRow方法:可多次调用，入参：字段名,值,对应关系
+#       使用方法: sql.where('id',1)
+#       使用方法: sql.where('id',1,'>')
 #   whereIn方法:可多次调用，入参：字段名,值(逗号拼接的字符串或元组)
 #       使用方法: sql.whereIn('id','1,2')
 #       使用方法: sql.whereIn('id',(1,2))
