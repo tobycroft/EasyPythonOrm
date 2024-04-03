@@ -16,9 +16,6 @@ import config.db
 #       使用方法: sql.where({'id',1,'<>'})
 #       使用方法: sql.where({'id','(1,2)','in'})
 #       使用方法: sql.where([{'id','(1,2)','in'},{'name','%我%','like'}])
-#   whereRow方法:可多次调用，入参：字段名,值,对应关系
-#       使用方法: sql.whereRow('id',1)
-#       使用方法: sql.whereRow('id',1,'>')
 #   whereIn方法:可多次调用，入参：字段名,值(逗号拼接的字符串或元组)
 #       使用方法: sql.whereIn('id','1,2')
 #       使用方法: sql.whereIn('id',(1,2))
@@ -283,13 +280,10 @@ class Db(object):
             print('禁止不使用 where 条件')
             return self
 
-    def whereRow(self, key, val, mark='='):
-        return self.where({'key': key, 'val': val, 'type': mark})
-
     def whereIn(self, key, val):
-        if typeof(val) == 'tuple':
-            return self.where({'key': key, 'val': '(' + ','.join(val) + ')', 'type': 'in'})
-        return self.where({'key': key, 'val': '(' + val + ')', 'type': 'in'})
+        if typeof(val) == 'str':
+            return self.where({'key': key, 'val': tuple(str(val).split(',')), 'type': 'in'})
+        return self.where({'key': key, 'val': tuple(val), 'type': 'in'})
 
     def whereLike(self, key, val):
         return self.where({'key': key, 'val': val, 'type': 'like'})
@@ -352,8 +346,7 @@ class Db(object):
         if len(self.__join) > 0:
             if '*' in column:
                 print('使用 join 必须指定字段名')
-                exit(-1)
-                # return None
+                return None
             for item in self.__join:
                 sql += item['mold'] + ' join ' + item['table'] + ' on ' + item['where'] + ' '
 
@@ -418,9 +411,26 @@ class Db(object):
             if self.__autocommit:
                 self.__close()
         except Exception as e:
-            print(sql, self.__bindWhere)
+            print("find-sql:", sql, self.__bindWhere)
             print(e)
-            exit(-1)
+            return None
+        if result is None:
+            return None
+        data = {}
+        for i, value in enumerate(result):
+            data[columns[i]] = value
+        return data
+
+    def query(self, sql, args=None):
+        try:
+            self.cursor.execute(sql, args)
+            result = self.cursor.fetchone()
+            columns = [desc[0] for desc in self.cursor.description]
+            if self.__autocommit:
+                self.__close()
+        except Exception as e:
+            print("query-error:", sql, args, e)
+            return None
         if result is None:
             return None
         data = {}
@@ -449,7 +459,7 @@ class Db(object):
         except Exception as e:
             print(sql, self.__bindWhere)
             print(e)
-            exit(-1)
+            return None
         if result is None:
             return None
         data = []
@@ -474,7 +484,7 @@ class Db(object):
         except Exception as e:
             print(sql)
             print(e)
-            exit(-1)
+            return None
         if result is not None:
             return result[0]
         else:
@@ -621,9 +631,6 @@ class Db(object):
         if fields == '':
             return 0
         sql = str("update " + self.__name + " set " + fields + ' ' + sql)
-        return self.__edit(sql)
-
-    def query(self, sql):
         return self.__edit(sql)
 
     # def __showColumn(self, is_str=False, table=None):
