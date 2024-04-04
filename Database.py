@@ -446,7 +446,6 @@ class Db(object):
             return
 
         column = self.__getField()
-
         sql = self.__comQuerySql()
         if self.__build:
             return sql, self.__bindWhere
@@ -480,18 +479,44 @@ class Db(object):
             return sql
         result = None
         try:
-            self.cursor.execute(sql)
+            self.cursor.execute(sql, self.__bindWhere)
             result = self.cursor.fetchone()
             if self.__autocommit:
                 self.__close()
         except Exception as e:
-            print(sql)
+            print(sql, self.__bindWhere)
             print(e)
             return None
         if result is not None:
             return result[0]
         else:
             return None
+
+    def column(self, field):
+        self.__column = field
+        sql = self.__comQuerySql()
+        if self.__build:
+            return sql
+        result = None
+        try:
+            self.cursor.execute(sql, self.__bindWhere)
+            result = self.cursor.fetchall()
+            if self.__autocommit:
+                self.__close()
+        except Exception as e:
+            print(sql, self.__bindWhere)
+            print(e)
+            return None
+        if result is not None:
+            columns = [desc[0] for desc in self.cursor.description]
+            data = []
+            for row in result:
+                row_data = {}
+                for i, value in enumerate(row):
+                    row_data[columns[i]] = value
+                if field in row_data:
+                    data.append(row_data[field])
+            return tuple(data)
 
     def count(self):
         return self.value('count(*)')
@@ -635,29 +660,6 @@ class Db(object):
             return 0
         sql = str("update " + self.__name + " set " + fields + ' ' + sql)
         return self.__edit(sql)
-
-    # def __showColumn(self, is_str=False, table=None):
-    #     if table is None:
-    #         table = self.__name
-    #     list_data = None
-    #     sql = "SHOW FULL COLUMNS FROM " + table
-    #     try:
-    #         self.__connect()
-    #         self.cursor.execute(sql)
-    #         list_data = self.cursor.fetchall()
-    #         self.__close()
-    #         if is_str:
-    #             return ','.join(list([item[0] for item in list_data]))
-    #     except Exception as e:
-    #         print(e)
-    #     return list([{'field': item[0], 'type': item[1], 'key': item[4]} for item in list_data])
-
-    # def __getPk(self):
-    #     # fields = self.__showColumn()
-    #     # for field in fields:
-    #     #     if field['key'] == 'PRI':
-    #     #         return field['field']
-    #     return None
 
     def __edit(self, sql):
         if self.__debug:
